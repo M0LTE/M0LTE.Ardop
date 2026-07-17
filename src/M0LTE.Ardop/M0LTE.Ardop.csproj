@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>M0LTE.Ardop</PackageId>
+    <Title>M0LTE.Ardop — ARDOP virtual TNC for .NET</Title>
+    <Description>A managed, ardopcf-compatible ARDOP 1 virtual TNC for .NET: the 4FSK/4PSK/8PSK/16QAM modulator and demodulator, Reed-Solomon FEC frames, the full ARQ engine (bandwidth negotiation, gearshift) and a byte-compatible TCP host interface, so Winlink hosts (Pat, Winlink Express, ARIM, hamChat) connect unmodified. Drive it from any audio device via the M0LTE.Radio.Audio seam. Extracted from the pdn-soundmodem packet-radio modem; validated bidirectionally against ardopcf.</Description>
+    <PackageTags>ardop;tnc;hf;winlink;pat;ardopcf;modem;psk;16qam;arq;amateur-radio;ham-radio</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="M0LTE.Fec" />
+    <PackageReference Include="M0LTE.Radio.Audio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="M0LTE.Ardop.Tests" />
+  </ItemGroup>
+
+</Project>

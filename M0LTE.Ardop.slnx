@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/M0LTE.Ardop/M0LTE.Ardop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/M0LTE.Ardop.Tests/M0LTE.Ardop.Tests.csproj" />
+  </Folder>
+</Solution>

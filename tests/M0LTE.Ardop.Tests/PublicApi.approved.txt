@@ -1,0 +1,368 @@
+namespace M0LTE.Ardop
+{
+    public static class ArdopCrc
+    {
+        public static void AppendCrc16(System.Span<byte> buffer, int length, byte frameType) { }
+        public static bool CheckCrc16(System.ReadOnlySpan<byte> data, int length, byte frameType) { }
+        public static ushort Crc16(System.ReadOnlySpan<byte> data) { }
+        public static byte Crc8(System.ReadOnlySpan<byte> data) { }
+        public static byte SessionId(string callerCallsign, string targetCallsign) { }
+    }
+    [System.Runtime.CompilerServices.RequiredMember]
+    public sealed class ArdopDecodedFrame : System.IEquatable<M0LTE.Ardop.ArdopDecodedFrame>
+    {
+        [System.Obsolete("Constructors of types with required members are not supported in this version of " +
+            "your compiler.", true)]
+        public ArdopDecodedFrame() { }
+        public string? Caller { get; init; }
+        public int? ConAckLeaderMs { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public byte[] Data { get; init; }
+        public string? GridSquare { get; init; }
+        public int LeaderReceivedMs { get; init; }
+        public string Name { get; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public bool Ok { get; init; }
+        public int? PingAckQuality { get; init; }
+        public int? PingAckSnDb { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public int Quality { get; init; }
+        public int RemoteLeaderMeasureMs { get; init; }
+        public int SnDb { get; init; }
+        public string? Target { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public byte Type { get; init; }
+    }
+    public sealed class ArdopDemodulator
+    {
+        public const int SampleRate = 12000;
+        public ArdopDemodulator(int squelch = 5, int tuningRangeHz = 100) { }
+        public byte? ConnectedSessionId { get; set; }
+        public int LeaderReceivedMs { get; }
+        public int MemoryArqTimeoutMs { get; set; }
+        public bool RxoMode { get; set; }
+        public byte RxoSessionId { get; }
+        public M0LTE.Ardop.ArdopRxScope? Scope { get; set; }
+        public event System.Action<M0LTE.Ardop.ArdopDecodedFrame>? FrameDecoded;
+        public event System.Action? MemoryArqStale;
+        public void ProcessSamples(System.ReadOnlySpan<float> samples) { }
+        public void ProcessSamples(System.ReadOnlySpan<short> samples) { }
+        public void ResetMemoryArq() { }
+    }
+    public sealed class ArdopFecReceiver
+    {
+        public ArdopFecReceiver(M0LTE.Ardop.ArdopDemodulator demodulator, bool attach = true) { }
+        public event System.Action<M0LTE.Ardop.ArdopFecTag, byte[]>? DataReceived;
+        public void ProcessFrame(M0LTE.Ardop.ArdopDecodedFrame frame) { }
+    }
+    public static class ArdopFecSender
+    {
+        public static System.Collections.Generic.IReadOnlyList<byte[]> BuildFrames(byte evenFrameType, System.ReadOnlySpan<byte> data, int repeats) { }
+    }
+    public enum ArdopFecTag
+    {
+        Fec = 0,
+        Err = 1,
+        Idf = 2,
+    }
+    public static class ArdopFrameCodec
+    {
+        public static int AckNakQuality(byte type) { }
+        public static int? DecodeConAck(System.ReadOnlySpan<byte> payload) { }
+        [return: System.Runtime.CompilerServices.TupleElementNames(new string[] {
+                "SnDb",
+                "Quality"})]
+        public static System.ValueTuple<int, int>? DecodePingAck(System.ReadOnlySpan<byte> payload) { }
+        public static byte[] EncodeConAck(byte type, int receivedLeaderMs, byte sessionId) { }
+        public static byte[] EncodeConReq(byte type, M0LTE.Ardop.ArdopStationId caller, M0LTE.Ardop.ArdopStationId target) { }
+        public static byte[] EncodeControl(byte type, byte sessionId) { }
+        public static byte[] EncodeDataAck(int quality, byte sessionId) { }
+        public static byte[] EncodeDataFrame(byte type, System.ReadOnlySpan<byte> data, byte sessionId) { }
+        public static byte[] EncodeDataNak(int quality, byte sessionId) { }
+        public static byte[] EncodeIdFrame(M0LTE.Ardop.ArdopStationId callsign, string gridSquare) { }
+        public static byte[] EncodePing(M0LTE.Ardop.ArdopStationId caller, M0LTE.Ardop.ArdopStationId target) { }
+        public static byte[] EncodePingAck(int snDb, int quality) { }
+        public static bool TryCorrectDataBlock(System.Span<byte> rawBlock, int dataLength, int rsLength, byte frameType, out int payloadLength) { }
+        public static bool TryCorrectDataBlock(System.Span<byte> rawBlock, int dataLength, int rsLength, byte frameType, out int payloadLength, out int rsCorrections) { }
+        public static bool TryDecodeStationBlock(System.Span<byte> rawBlock, bool secondFieldIsGrid, out M0LTE.Ardop.ArdopStationId first, out M0LTE.Ardop.ArdopStationId? secondStation, out string second) { }
+    }
+    public sealed class ArdopFrameInfo : System.IEquatable<M0LTE.Ardop.ArdopFrameInfo>
+    {
+        public ArdopFrameInfo(byte Type, string Name, bool IsOdd, int CarrierCount, M0LTE.Ardop.ArdopModulation Modulation, int Baud, int DataLength, int RsLength, byte QualityThreshold) { }
+        public int Baud { get; init; }
+        public int CarrierCount { get; init; }
+        public int DataLength { get; init; }
+        public bool IsOdd { get; init; }
+        public M0LTE.Ardop.ArdopModulation Modulation { get; init; }
+        public string Name { get; init; }
+        public byte QualityThreshold { get; init; }
+        public int RsLength { get; init; }
+        public byte Type { get; init; }
+        public static M0LTE.Ardop.ArdopFrameInfo Get(byte type) { }
+        public static bool TryGet(byte type, out M0LTE.Ardop.ArdopFrameInfo info) { }
+    }
+    public static class ArdopFrameType
+    {
+        public const byte Break = 35;
+        public const byte ConAck1000 = 59;
+        public const byte ConAck200 = 57;
+        public const byte ConAck2000 = 60;
+        public const byte ConAck500 = 58;
+        public const byte ConRejBusy = 45;
+        public const byte ConRejBw = 46;
+        public const byte ConReq1000F = 55;
+        public const byte ConReq1000M = 51;
+        public const byte ConReq2000F = 56;
+        public const byte ConReq2000M = 52;
+        public const byte ConReq200F = 53;
+        public const byte ConReq200M = 49;
+        public const byte ConReq500F = 54;
+        public const byte ConReq500M = 50;
+        public const byte ConReqMax = 56;
+        public const byte ConReqMin = 49;
+        public const byte DataAckMin = 224;
+        public const byte DataNakMax = 31;
+        public const byte DataNakMin = 0;
+        public const byte Disc = 41;
+        public const byte End = 44;
+        public const byte IdFrame = 48;
+        public const byte Idle = 36;
+        public const byte Ping = 62;
+        public const byte PingAck = 61;
+        public static System.ReadOnlySpan<byte> ValidTypesAll { get; }
+        public static System.ReadOnlySpan<byte> ValidTypesIss { get; }
+        public static bool IsData(byte type) { }
+        public static bool IsShortControl(byte type) { }
+        public static string Name(byte type) { }
+        public static byte TypeParity(byte frameType) { }
+    }
+    public enum ArdopModulation
+    {
+        Fsk4 = 0,
+        Psk4 = 1,
+        Psk8 = 2,
+        Qam16 = 3,
+    }
+    public sealed class ArdopModulator
+    {
+        public const int SampleRate = 12000;
+        public ArdopModulator(int driveLevel = 100) { }
+        public short[] Modulate(System.ReadOnlySpan<byte> encodedFrame, int leaderLengthMs = 240, int trailerLengthMs = 20) { }
+        public short[] TwoToneTest() { }
+    }
+    public static class ArdopPacked6
+    {
+        public const int MaxChars = 8;
+        public const int Size = 6;
+        public static bool Pack(string text, System.Span<byte> packed) { }
+        public static string Unpack(System.ReadOnlySpan<byte> packed) { }
+    }
+    public sealed class ArdopRxScope
+    {
+        public ArdopRxScope() { }
+        public bool Connected { get; set; }
+        public byte LastSessionId { get; set; }
+        public bool Pending { get; set; }
+        public byte PendingSessionId { get; set; }
+        public byte SessionId { get; set; }
+        public bool UseIssCandidates { get; set; }
+    }
+    public sealed class ArdopStationId
+    {
+        public string Call { get; }
+        public char SsidChar { get; }
+        public void ToBytes(System.Span<byte> destination) { }
+        public override string ToString() { }
+        public static bool TryFromBytes(System.ReadOnlySpan<byte> wire, out M0LTE.Ardop.ArdopStationId stationId) { }
+        public static bool TryParse(string text, out M0LTE.Ardop.ArdopStationId stationId) { }
+    }
+}
+namespace M0LTE.Ardop.Arq
+{
+    public sealed class ArdopArqConfig
+    {
+        public ArdopArqConfig() { }
+        public M0LTE.Ardop.Arq.ArdopBandwidth ArqBandwidth { get; set; }
+        public int ArqDefaultDelayMs { get; set; }
+        public int ArqTimeoutSeconds { get; set; }
+        public bool AutoBreak { get; set; }
+        public System.Collections.Generic.List<M0LTE.Ardop.ArdopStationId> AuxCalls { get; }
+        public M0LTE.Ardop.Arq.ArdopBandwidth CallBandwidth { get; set; }
+        public int ConReqRepeats { get; set; }
+        public bool EnablePingAck { get; set; }
+        public int ExtraDelayMs { get; set; }
+        public bool FastStart { get; set; }
+        public bool FskOnly { get; set; }
+        public string GridSquare { get; set; }
+        public int LeaderLengthMs { get; set; }
+        public bool Listen { get; set; }
+        public M0LTE.Ardop.ArdopStationId? MyCall { get; set; }
+        public int TuningRangeHz { get; set; }
+        public bool Use600Modes { get; set; }
+    }
+    public sealed class ArdopArqEngine
+    {
+        public ArdopArqEngine(M0LTE.Ardop.Arq.ArdopArqConfig config, int? randomSeed = default) { }
+        public M0LTE.Ardop.Arq.ArdopGearshift Gearshift { get; }
+        public bool IsConnected { get; }
+        public bool IsPending { get; }
+        public byte LastSessionId { get; }
+        public int OutboundCount { get; }
+        public byte PendingSessionId { get; }
+        public M0LTE.Ardop.ArdopStationId? RemoteStation { get; }
+        public int SessionBandwidthHz { get; }
+        public byte SessionId { get; }
+        public M0LTE.Ardop.Arq.ArdopProtocolState State { get; }
+        public M0LTE.Ardop.Arq.ArdopArqStats Stats { get; }
+        public M0LTE.Ardop.Arq.ArdopArqSubState SubState { get; }
+        public event System.Action<byte[]>? DataReceived;
+        public event System.Action<string>? HostNotification;
+        public event System.Action? MemoryArqResetRequested;
+        public event System.Action<M0LTE.Ardop.Arq.ArdopTxRequest>? TransmitRequested;
+        public void Abort(long nowMs) { }
+        public void BreakRequested(long nowMs) { }
+        public bool ConnectRequest(M0LTE.Ardop.ArdopStationId target, long nowMs) { }
+        public void Disconnect(long nowMs) { }
+        public void EnqueueData(System.ReadOnlySpan<byte> data) { }
+        public void FrameReceived(M0LTE.Ardop.ArdopDecodedFrame frame, long nowMs) { }
+        public bool Ping(M0LTE.Ardop.ArdopStationId target, int repeats, long nowMs) { }
+        public void Poll(long nowMs) { }
+        public void PurgeBuffer() { }
+        public void SendId(long nowMs) { }
+        public void SyncRxScope(M0LTE.Ardop.ArdopRxScope scope) { }
+        public void TransmitCompleted(long nowMs) { }
+    }
+    public sealed class ArdopArqStation
+    {
+        public ArdopArqStation(M0LTE.Ardop.Arq.ArdopArqConfig config, int? randomSeed = default, int driveLevel = 100) { }
+        public M0LTE.Ardop.ArdopDemodulator Demodulator { get; }
+        public M0LTE.Ardop.Arq.ArdopArqEngine Engine { get; }
+        public bool IsTransmitting { get; }
+        public long NowMs { get; }
+        public System.Func<M0LTE.Ardop.Arq.ArdopTxRequest, short[], short[]>? TransmitFilter { get; set; }
+        public event System.Action<M0LTE.Ardop.ArdopDecodedFrame, long>? FrameDecoded;
+        public event System.Action<M0LTE.Ardop.Arq.ArdopTxRequest, long>? FrameTransmitted;
+        public short[] Step(System.ReadOnlySpan<short> rxSamples) { }
+    }
+    public sealed class ArdopArqStats
+    {
+        public ArdopArqStats() { }
+        public int DataAcksReceived { get; }
+        public int LinkTurnovers { get; }
+        public int NaksReceived { get; }
+        public int NaksSent { get; }
+        public int RepeatsSent { get; }
+    }
+    public enum ArdopArqSubState
+    {
+        None = 0,
+        IssConReq = 1,
+        IssConAck = 2,
+        IssData = 3,
+        IssId = 4,
+        IrsConAck = 5,
+        IrsData = 6,
+        IrsBreak = 7,
+        IrsFromIss = 8,
+        DiscArqEnd = 9,
+    }
+    public enum ArdopBandwidth
+    {
+        B200Forced = 0,
+        B500Forced = 1,
+        B1000Forced = 2,
+        B2000Forced = 3,
+        B200Max = 4,
+        B500Max = 5,
+        B1000Max = 6,
+        B2000Max = 7,
+        Undefined = 8,
+    }
+    public static class ArdopBandwidthExtensions
+    {
+        public static byte ConReqFrameType(this M0LTE.Ardop.Arq.ArdopBandwidth bandwidth) { }
+        public static int Hertz(this M0LTE.Ardop.Arq.ArdopBandwidth bandwidth) { }
+        public static bool IsForced(this M0LTE.Ardop.Arq.ArdopBandwidth bandwidth) { }
+        public static bool TryParse(string text, out M0LTE.Ardop.Arq.ArdopBandwidth bandwidth) { }
+    }
+    public static class ArdopDataLadder
+    {
+        public static int FrameCapacity(byte type) { }
+        public static System.ReadOnlySpan<byte> Modes(int bandwidthHz, bool fskOnly, bool fmModes = false) { }
+        public static System.ReadOnlySpan<byte> ShiftUpThresholds(int bandwidthHz, bool fmModes = false) { }
+    }
+    public sealed class ArdopGearshift
+    {
+        public ArdopGearshift() { }
+        public int AverageQuality { get; }
+        public byte CurrentFrameType { get; }
+        public bool IsInitialized { get; }
+        public int PendingShift { get; }
+        public int ShiftDowns { get; }
+        public int ShiftUps { get; }
+        public void Initialize(int sessionBandwidthHz, bool fskOnly, bool fastStart, bool fmModes = false) { }
+        public byte NextTypeToSend(byte lastAckedDataFrameType) { }
+        public void RecordAck(int reportedQuality, int bytesRemaining) { }
+        public bool RecordNak(int reportedQuality, int bytesRemaining) { }
+        public void Reset() { }
+    }
+    public enum ArdopProtocolState
+    {
+        Disc = 0,
+        Iss = 1,
+        Irs = 2,
+        Idle = 3,
+        IrsToIss = 4,
+    }
+    [System.Runtime.CompilerServices.RequiredMember]
+    public sealed class ArdopTxRequest : System.IEquatable<M0LTE.Ardop.Arq.ArdopTxRequest>
+    {
+        [System.Obsolete("Constructors of types with required members are not supported in this version of " +
+            "your compiler.", true)]
+        public ArdopTxRequest() { }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public byte[] EncodedFrame { get; init; }
+        public bool IsRepeat { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public int LeaderLengthMs { get; init; }
+        public long NotBeforeMs { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public byte Type { get; init; }
+    }
+}
+namespace M0LTE.Ardop.Host
+{
+    public enum ArdopHostProtocolMode
+    {
+        Arq = 0,
+        Fec = 1,
+        Rxo = 2,
+    }
+    public sealed class ArdopHostServer : System.IAsyncDisposable
+    {
+        public ArdopHostServer(M0LTE.Ardop.Host.ArdopHostTnc tnc, int commandPort = 8515, System.Net.IPAddress? bind = null, bool ownsTnc = false) { }
+        public int LocalCommandPort { get; }
+        public int LocalDataPort { get; }
+        public M0LTE.Ardop.Host.ArdopHostTnc Tnc { get; }
+        public System.Threading.Tasks.ValueTask DisposeAsync() { }
+        public void Start() { }
+        public static M0LTE.Ardop.Host.ArdopHostServer ForAudio(M0LTE.Radio.Audio.IAudioInput input, M0LTE.Radio.Audio.IAudioOutput output, M0LTE.Radio.Audio.IPttControl ptt, int commandPort = 8515, System.Net.IPAddress? bind = null, string audioDevice = "default") { }
+    }
+    public sealed class ArdopHostTnc : System.IAsyncDisposable
+    {
+        public ArdopHostTnc(string captureDevice = "default", string playbackDevice = "default", System.Func<long>? clock = null, int? randomSeed = default, string? version = null) { }
+        public M0LTE.Ardop.Arq.ArdopArqConfig Config { get; }
+        public M0LTE.Ardop.Arq.ArdopArqEngine Engine { get; }
+        public M0LTE.Ardop.Host.ArdopHostProtocolMode ProtocolMode { get; }
+        public System.Func<short[], System.Threading.Tasks.Task>? Transmitter { get; set; }
+        public event System.Action? CloseRequested;
+        public event System.Action<string>? CommandToHost;
+        public event System.Action<string, byte[]>? DataToHost;
+        public void AcceptHostData(System.ReadOnlySpan<byte> data) { }
+        public System.Threading.Tasks.ValueTask DisposeAsync() { }
+        public void HostLinkLost() { }
+        public void Poll() { }
+        public void ProcessCommand(string line) { }
+        public void ProcessReceive(System.ReadOnlySpan<float> samples) { }
+    }
+}
