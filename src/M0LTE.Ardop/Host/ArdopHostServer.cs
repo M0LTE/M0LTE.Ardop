@@ -35,6 +35,8 @@ public sealed class ArdopHostServer : IAsyncDisposable
     private TcpClient? _commandClient;
     private TcpClient? _dataClient;
     private Thread? _receivePump;
+    private readonly TaskCompletionSource _commandAccepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _dataAccepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Creates a host server over an existing TNC.</summary>
     /// <param name="tnc">The virtual TNC (its <see cref="ArdopHostTnc.Transmitter"/>
@@ -161,6 +163,10 @@ public sealed class ArdopHostServer : IAsyncDisposable
         _loops.Add(PollLoopAsync());
     }
 
+    /// <summary>Completes when both a command and a data client have connected.</summary>
+    public Task WaitForConnectionsAsync(CancellationToken ct = default) =>
+        Task.WhenAll(_commandAccepted.Task.WaitAsync(ct), _dataAccepted.Task.WaitAsync(ct));
+
     private async Task PollLoopAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(20));
@@ -203,6 +209,7 @@ public sealed class ArdopHostServer : IAsyncDisposable
                 }
 
                 previous?.Dispose();
+                if (isData) _dataAccepted.TrySetResult(); else _commandAccepted.TrySetResult();
                 _ = isData ? ServeDataAsync(client) : ServeCommandAsync(client);
             }
         }

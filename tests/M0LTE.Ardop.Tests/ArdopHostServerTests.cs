@@ -34,6 +34,7 @@ public class ArdopHostServerTests
             Server.Start();
             Command = new TcpClient("127.0.0.1", Server.LocalCommandPort);
             Data = new TcpClient("127.0.0.1", Server.LocalDataPort);
+            Server.WaitForConnectionsAsync().GetAwaiter().GetResult();
             _ = Pump(Command, _commandBytes);
             _ = Pump(Data, _dataBytes);
         }
