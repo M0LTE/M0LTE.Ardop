@@ -346,6 +346,7 @@ namespace M0LTE.Ardop.Host
         public M0LTE.Ardop.Host.ArdopHostTnc Tnc { get; }
         public System.Threading.Tasks.ValueTask DisposeAsync() { }
         public void Start() { }
+        public System.Threading.Tasks.Task WaitForConnectionsAsync(System.Threading.CancellationToken ct = default) { }
         public static M0LTE.Ardop.Host.ArdopHostServer ForAudio(M0LTE.Radio.Audio.IAudioInput input, M0LTE.Radio.Audio.IAudioOutput output, M0LTE.Radio.Audio.IPttControl ptt, int commandPort = 8515, System.Net.IPAddress? bind = null, string audioDevice = "default") { }
     }
     public sealed class ArdopHostTnc : System.IAsyncDisposable
