@@ -444,6 +444,86 @@ public class ArdopHostTncTests
         status.Should().Contain(s => s.Contains("END frame received OK."));
     }
 
+    // ------------------------------------------------------------ monitor hook
+
+    [Fact]
+    public async Task Frame_Decoded_Reports_Frames_From_A_Session_This_Station_Is_Not_In()
+    {
+        // What a waterfall or a station log needs, and what the data socket cannot give it: the
+        // channel as heard, including traffic between two other stations. Default (ARQ) mode,
+        // not RXO — a station that is merely idle must still be able to show what went past.
+        var configA = new ArdopArqConfig
+        {
+            MyCall = Station("M0AAA"),
+            GridSquare = "IO81VK",
+            ArqBandwidth = ArdopBandwidth.B500Max,
+            FskOnly = true,
+        };
+        var configB = new ArdopArqConfig
+        {
+            MyCall = Station("G8BBB"),
+            GridSquare = "IO92XX",
+            ArqBandwidth = ArdopBandwidth.B500Max,
+            FskOnly = true,
+        };
+        var a = new ArdopArqStation(configA, randomSeed: 11);
+        var b = new ArdopArqStation(configB, randomSeed: 22);
+
+        byte[] payload = new byte[40];
+        new Random(9).NextBytes(payload);
+        a.Engine.EnqueueData(payload);
+        a.Engine.ConnectRequest(Station("G8BBB"), 0).Should().BeTrue();
+
+        var mixed = new List<float>();
+        var aToB = new short[240];
+        var bToA = new short[240];
+        bool discRequested = false;
+        bool disconnected = false;
+        for (int i = 0; i < 60_000 / 20 && !disconnected; i++)
+        {
+            short[] fromA = a.Step(bToA);
+            short[] fromB = b.Step(aToB);
+            for (int s = 0; s < 240; s++)
+            {
+                mixed.Add((fromA[s] + fromB[s]) / 32768f);
+            }
+
+            aToB = fromA;
+            bToA = fromB;
+            if (a.Engine.IsConnected && a.Engine.OutboundCount == 0 && !discRequested)
+            {
+                a.Engine.Disconnect(a.NowMs);
+                discRequested = true;
+            }
+
+            disconnected = discRequested
+                && a.Engine.State == ArdopProtocolState.Disc
+                && b.Engine.State == ArdopProtocolState.Disc
+                && !a.IsTransmitting && !b.IsTransmitting;
+        }
+
+        disconnected.Should().BeTrue("the monitored session must complete");
+
+        await using var monitor = new Host();
+        var heard = new List<ArdopDecodedFrame>();
+        monitor.Tnc.FrameDecoded += frame => heard.Add(frame);
+        monitor.Tnc.ProcessReceive([.. mixed]);
+        monitor.Tnc.ProcessReceive(new float[4800]);
+
+        heard.Should().NotBeEmpty("an idle station still hears the channel");
+        heard.Select(f => f.Name).Should().Contain("ConReq500M", "the handshake is the interesting part");
+        heard.Should().Contain(f => f.Name.StartsWith("4FSK.", StringComparison.Ordinal),
+            "the data frames are what a monitor counts");
+
+        // The connect request carries both callsigns in clear, which is what makes a monitor
+        // able to say who was talking to whom without ever joining the session.
+        ArdopDecodedFrame conReq = heard.First(f => f.Name == "ConReq500M");
+        conReq.Caller.Should().Be("M0AAA");
+        conReq.Target.Should().Be("G8BBB");
+        conReq.Ok.Should().BeTrue();
+        heard.Should().Contain(f => f.SnDb != 0, "a monitor reports how well it heard each frame");
+    }
+
     // ------------------------------------------------- full session, host to host
 
     [Fact]

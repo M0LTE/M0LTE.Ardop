@@ -177,6 +177,20 @@ public sealed class ArdopHostTnc : IAsyncDisposable
     /// services); standalone tests may stop on it.</summary>
     public event Action? CloseRequested;
 
+    /// <summary>
+    /// Every frame the demodulator recovers, good or bad, before the protocol decides what to
+    /// do with it — including frames belonging to other stations' sessions, which the host
+    /// interface never sees.
+    /// </summary>
+    /// <remarks>
+    /// For monitors: a waterfall or a log wants to show what was heard on the channel, and the
+    /// data socket only carries what was addressed here and decoded. A failed decode
+    /// (<see cref="ArdopDecodedFrame.Ok"/> false) is reported too, since "someone transmitted
+    /// and we could not read it" is exactly what a monitor exists to show. Raised on the audio
+    /// thread: handlers must not block.
+    /// </remarks>
+    public event Action<ArdopDecodedFrame>? FrameDecoded;
+
     // ------------------------------------------------------------------ audio side
 
     /// <summary>Feeds received channel audio (12 kHz floats, the daemon's RX-tap
@@ -1148,6 +1162,11 @@ public sealed class ArdopHostTnc : IAsyncDisposable
     // The per-mode frame routing of ProcessNewSamples (SoundInput.c:1300-1420).
     private void OnFrameDecoded(ArdopDecodedFrame frame)
     {
+        // Before the routing below, so a monitor sees the channel rather than this station's
+        // share of it: frames for other stations, and frames that failed to decode, both stop
+        // here otherwise.
+        FrameDecoded?.Invoke(frame);
+
         switch (_mode)
         {
             case ArdopHostProtocolMode.Rxo:

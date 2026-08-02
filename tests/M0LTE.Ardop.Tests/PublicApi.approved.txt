@@ -359,6 +359,7 @@ namespace M0LTE.Ardop.Host
         public event System.Action? CloseRequested;
         public event System.Action<string>? CommandToHost;
         public event System.Action<string, byte[]>? DataToHost;
+        public event System.Action<M0LTE.Ardop.ArdopDecodedFrame>? FrameDecoded;
         public void AcceptHostData(System.ReadOnlySpan<byte> data) { }
         public System.Threading.Tasks.ValueTask DisposeAsync() { }
         public void HostLinkLost() { }
