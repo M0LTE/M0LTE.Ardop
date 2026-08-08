@@ -1934,11 +1934,17 @@ public sealed class ArdopDemodulator
         {
             case >= ArdopFrameType.ConAck200 and <= ArdopFrameType.ConAck2000:
             {
+                // A ConAck is accepted on type decode alone, like the reference:
+                // ardopcf's Decode4FSKConACK (SoundInput.c:3059) initialises Timing
+                // to 0 and tests Timing >= 0, so it passes even when the three
+                // timing bytes have no 2-of-3 majority, and deployed peers proceed
+                // on such ConAcks. We diverge only in what we report: timing stays
+                // null when unmeasured rather than fabricating ardopcf's 0 ms.
                 int? timing = ArdopFrameCodec.DecodeConAck(_frameData.AsSpan(0, 3));
                 Emit(new ArdopDecodedFrame
                 {
                     Type = info.Type,
-                    Ok = timing is not null,
+                    Ok = true,
                     Data = [],
                     Quality = quality,
                     ConAckLeaderMs = timing,

@@ -184,6 +184,26 @@ public class ArdopLoopbackTests
     }
 
     [Fact]
+    public void Con_Ack_Without_A_Timing_Majority_Is_Still_Accepted_With_Null_Timing()
+    {
+        // Reference behaviour: ardopcf's Decode4FSKConACK cannot fail a ConAck body
+        // (Timing >= 0 guard, SoundInput.c:3059), and deployed ISS peers proceed on
+        // majority-less ConAcks - measured on the 40 m wild corpus, where all five
+        // disputed ConAck500s decoded there as "timing 0 ms". We accept the frame and
+        // report the timing we did not measure as null rather than a fabricated 0.
+        byte type = ArdopFrameType.ConAck500;
+        byte[] frame = [type, (byte)(type ^ 0xFF), 10, 20, 30];
+        short[] audio = new ArdopModulator().Modulate(frame);
+
+        var frames = Decode(audio);
+
+        frames.Should().ContainSingle();
+        frames[0].Type.Should().Be(type);
+        frames[0].Ok.Should().BeTrue();
+        frames[0].ConAckLeaderMs.Should().BeNull();
+    }
+
+    [Fact]
     public void Ping_Ack_Round_Trips_Sn_And_Quality()
     {
         short[] audio = new ArdopModulator().Modulate(ArdopFrameCodec.EncodePingAck(snDb: 12, quality: 80));
