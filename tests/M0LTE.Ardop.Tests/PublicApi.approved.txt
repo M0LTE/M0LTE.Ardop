@@ -187,7 +187,10 @@ namespace M0LTE.Ardop.Arq
         public int ArqTimeoutSeconds { get; set; }
         public bool AutoBreak { get; set; }
         public System.Collections.Generic.List<M0LTE.Ardop.ArdopStationId> AuxCalls { get; }
+        public bool BusyBlock { get; set; }
+        public int BusyDetectLevel { get; set; }
         public M0LTE.Ardop.Arq.ArdopBandwidth CallBandwidth { get; set; }
+        public System.Func<bool>? ChannelBusy { get; set; }
         public int ConReqRepeats { get; set; }
         public bool EnablePingAck { get; set; }
         public int ExtraDelayMs { get; set; }
@@ -204,6 +207,7 @@ namespace M0LTE.Ardop.Arq
     {
         public ArdopArqEngine(M0LTE.Ardop.Arq.ArdopArqConfig config, int? randomSeed = default) { }
         public M0LTE.Ardop.Arq.ArdopGearshift Gearshift { get; }
+        public bool IsChannelBusy { get; }
         public bool IsConnected { get; }
         public bool IsPending { get; }
         public byte LastSessionId { get; }
@@ -221,6 +225,7 @@ namespace M0LTE.Ardop.Arq
         public event System.Action<M0LTE.Ardop.Arq.ArdopTxRequest>? TransmitRequested;
         public void Abort(long nowMs) { }
         public void BreakRequested(long nowMs) { }
+        public void ClearBusyDetector(long nowMs) { }
         public bool ConnectRequest(M0LTE.Ardop.ArdopStationId target, long nowMs) { }
         public void Disconnect(long nowMs) { }
         public void EnqueueData(System.ReadOnlySpan<byte> data) { }
