@@ -44,6 +44,42 @@ server.Start();
 `ptt`, plays through `tx`, drains, and unkeys. For full control, construct
 `new ArdopHostTnc(...)` yourself and bind its `Transmitter` / `ProcessReceive` seam directly.
 
+## Channel busy
+
+ardopcf's busy detector is **not** ported: it is a spectral peak-to-baseline test on the
+receive audio (`BusyDetect.c`), and this package has no audio device of its own. What is
+ported is everything ardopcf drives *from* the busy state, over a seam the host
+application fills in:
+
+```csharp
+tnc.Config.ChannelBusy = () => myModem.ChannelIsOccupied;   // default: null
+```
+
+**The default is "never busy".** Leave `ChannelBusy` unset and nothing below happens,
+whatever `BUSYDET` and `BUSYBLOCK` are set to, so existing behaviour is unchanged. Wire it
+and:
+
+- `BUSY TRUE` / `BUSY FALSE` go to the host on transitions, with ardopcf's hysteresis
+  applied to your raw reading: three consecutive samples (about 300 ms) to assert, and a
+  5 s hold after the last busy reading before it releases. Only a raw "is the channel
+  occupied now" answer is wanted here; the timing is ours.
+- `BUSYBLOCK TRUE` refuses an inbound `ConReq` with `ConRejBusy` when the channel was
+  already in use by someone other than the caller (ardopcf's rule, `ARQ.c:1199`), and
+  blocks an outgoing `ARQCALL` with `FAULT Blocked by Busy`. The outgoing half is an
+  addition: ardopcf calls regardless and leaves the decision to the host it told
+  `BUSY TRUE`.
+- The post-session and 10-minute ID frames wait for a clear channel, as in ardopcf.
+- `BUSYDET 0` disables detection exactly as ardopcf does. `BUSYDET 1`-`10` are thresholds
+  on a spectral ratio that does not exist here, so they cannot be honoured through a
+  boolean; the value is kept, reported back, and published on the config for the seam's
+  owner to act on.
+
+**The busy state gates session initiation only.** It is sampled solely in protocol state
+DISC, exactly as in ardopcf, so it can never delay a transmission inside a session: an IRS
+has to ACK inside the ISS's repeat window, and a busy check that stalled a burst would
+break the link rather than protect the channel. See
+`A_busy_channel_must_never_disturb_an_in_flight_session` in the test suite.
+
 ## Licence & provenance
 
 AGPL-3.0-or-later (see [`LICENSE`](LICENSE)). A port with provenance of the MIT-licensed

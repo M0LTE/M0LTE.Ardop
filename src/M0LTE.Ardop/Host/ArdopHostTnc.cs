@@ -41,16 +41,30 @@ public enum ArdopHostProtocolMode
 /// plays through <see cref="Transmitter"/> — the host binds that to an audio device (see
 /// <c>ArdopHostServer.ForAudio</c>), whose completion is the sample-domain end of playout
 /// (where ardopcf's <c>SoundFlush</c> returns, arming the repeat window).</para>
+/// <para><b>Channel busy.</b> ardopcf's spectral busy detector is not ported, because
+/// this package has no audio device and no spectrum. Everything ardopcf drives from the
+/// busy state is ported, over a seam the host application fills in:
+/// <see cref="ArdopArqConfig.ChannelBusy"/>, which defaults to unset and therefore to
+/// "never busy". Wire it and <c>BUSY TRUE</c>/<c>BUSY FALSE</c> are sent on transitions
+/// with ardopcf's hysteresis, BUSYBLOCK refuses an inbound ConReq with ConRejBusy
+/// (ARQ.c:1199) and, as a documented addition, blocks an outgoing ARQCALL, and the
+/// post-session and 10-minute ID frames wait for a clear channel. Leave it unset and none
+/// of that happens, whatever BUSYDET and BUSYBLOCK are set to. BUSYDET 0 is honoured
+/// exactly (detection off); BUSYDET 1-10 is a threshold on a spectral ratio in ardopcf
+/// (BusyDetect.c:102) and cannot be honoured through a boolean seam, so the value is kept,
+/// reported back, and published on the config for the seam's owner to act on. The busy
+/// state is sampled only in protocol state DISC, as in ardopcf (ARDOPC.c:2054, :2102), so
+/// it gates session initiation only and can never delay a transmission inside a
+/// session.</para>
 /// <para><b>Deliberate deviations from ardopcf</b> (documented in README § ARDOP):
-/// the busy detector is not ported, so <c>BUSY TRUE/FALSE</c> notifications are never
-/// sent and BUSYDET/BUSYBLOCK are accepted but inert; CONSOLELOG/LOGLEVEL/DEBUGLOG/
-/// CMDTRACE are accepted but inert (the daemon has no leveled log files); CWID is
-/// accepted but no CW audio is sent after ID frames yet; TXFRAME (a development
-/// command) is not implemented; CAPTURE/PLAYBACK report the daemon's audio device and
-/// accept-but-ignore changes (matching ardopcf, where changing them does not reroute
-/// audio); the command processor acts on any CR-terminated command rather than
-/// requiring 4 buffered bytes; VERSION reports this implementation's name; the
-/// FECRCV transient state is not reported (NEWSTATE FECRCV).</para>
+/// CONSOLELOG/LOGLEVEL/DEBUGLOG/CMDTRACE are accepted but inert (the daemon has no
+/// leveled log files); CWID is accepted but no CW audio is sent after ID frames yet;
+/// TXFRAME (a development command) is not implemented; CAPTURE/PLAYBACK report the
+/// daemon's audio device and accept-but-ignore changes (matching ardopcf, where
+/// changing them does not reroute audio); the command processor acts on any
+/// CR-terminated command rather than requiring 4 buffered bytes; VERSION reports this
+/// implementation's name; the FECRCV transient state is not reported
+/// (NEWSTATE FECRCV).</para>
 /// </remarks>
 public sealed class ArdopHostTnc : IAsyncDisposable
 {
@@ -99,8 +113,6 @@ public sealed class ArdopHostTnc : IAsyncDisposable
     private int _driveLevel = 100;         // DriveLevel (ARDOPC.c:105)
     private int _trailerMs = 20;           // TrailerLength (ARDOPC.c:99)
     private int _squelch = 5;              // Squelch (ARDOPC.c:109)
-    private int _busyDet = 5;              // BusyDet (ARDOPC.c:110) — inert, see remarks
-    private bool _busyBlock;               // BusyBlock (ARQ.c:100) — inert
     private bool _monitor = true;          // Monitor (ARQ.c:97)
     private string _fecMode = "4FSK.500.100";  // strFECMode (ARDOPC.c:106)
     private int _fecRepeats;               // FECRepeats (ARDOPC.c:107)
@@ -437,6 +449,13 @@ public sealed class ArdopHostTnc : IAsyncDisposable
                 {
                     fault = "Not from mode RXO";
                 }
+                else if (Config.BusyBlock && Engine.IsChannelBusy)
+                {
+                    // Not an ardopcf fault: ardopcf calls regardless of the busy state
+                    // (ARDOPC.c:1914). See ArdopArqConfig.BusyBlock for why we refuse, and
+                    // note it takes BUSYBLOCK TRUE plus a wired ChannelBusy seam to reach.
+                    fault = "Blocked by Busy";
+                }
                 else
                 {
                     Config.ConReqRepeats = callAttempts;
@@ -479,12 +498,20 @@ public sealed class ArdopHostTnc : IAsyncDisposable
                 break;
 
             case "BUSYBLOCK":
-                TrueFalse(cmd, ref _busyBlock);
+            {
+                bool busyBlock = Config.BusyBlock;
+                TrueFalse(cmd, ref busyBlock);
+                Config.BusyBlock = busyBlock;
                 break;
+            }
 
             case "BUSYDET":
-                IntCmd(cmd, ref _busyDet, static i => i is >= 0 and <= 10);
+            {
+                int busyDet = Config.BusyDetectLevel;
+                IntCmd(cmd, ref busyDet, static i => i is >= 0 and <= 10);
+                Config.BusyDetectLevel = busyDet;
                 break;
+            }
 
             case "CALLBW":
                 if (p is null)
@@ -767,7 +794,11 @@ public sealed class ArdopHostTnc : IAsyncDisposable
             case "LISTEN":
             {
                 bool listen = Config.Listen;
-                TrueFalse(cmd, ref listen);
+                if (TrueFalse(cmd, ref listen) && listen)
+                {
+                    Engine.ClearBusyDetector(now);  // ClearBusy on LISTEN TRUE (HostInterface.c:882)
+                }
+
                 Config.Listen = listen;
                 break;
             }

@@ -54,9 +54,11 @@ public sealed class ArdopArqStats
 /// as ardopcf's main loop is while blocked in playout.
 /// </para>
 /// <para>
-/// <b>Deliberate deviations</b> (none affect the wire format): the busy detector is
-/// not ported, so BUSYBLOCK/ConRejBusy origination is absent (we still honour a
-/// received ConRejBusy) and the final-ID busy gate is a plain timer; ardopcf's
+/// <b>Deliberate deviations</b> (none affect the wire format): ardopcf's spectral busy
+/// detector is not ported (this package has no audio device), so the busy state comes
+/// from the host through <see cref="ArdopArqConfig.ChannelBusy"/>; everything ardopcf
+/// drives from that state is ported on top of it, plus one addition, BUSYBLOCK also
+/// blocking an outgoing call (<see cref="ArdopArqConfig.BusyBlock"/>). ardopcf's
 /// END-after-DISC is encoded <i>after</i> <c>InitializeConnection()</c> resets the
 /// session ID in two of its three handlers, so those ENDs go out with session ID 0xFF
 /// and the peer's teardown completes on the DISC-from-DISC replay instead — that quirk
@@ -113,6 +115,30 @@ public sealed class ArdopArqEngine
     private int _pingRepeats;                // intPINGRepeats
     private bool _pingRepeating;             // blnPINGrepeating
 
+    // Channel-busy state (BusyDetect.c), fed by ArdopArqConfig.ChannelBusy rather than
+    // by a spectrum. Sampled in DISC only; see SampleBusyDetector.
+    private bool _busy;                      // blnLastBusy (BusyDetect.c:18)
+    private bool _busyReported;              // blnLastBusyStatus (ARDOPC.c:2045)
+    private bool _busySeeded;                // no equivalent: ardopcf's globals start zeroed
+    private int _busyOnCount;                // intBusyOnCnt (BusyDetect.c:26)
+    private int _busyOffCount;               // intBusyOffCnt (BusyDetect.c:27)
+    private long _busySampledAtMs;           // LastBusyCheck (ARDOPC.c:2010)
+    private long _busyLastRawMs;             // dttLastTrip (BusyDetect.c:31)
+    private long _busyLastTripMs;            // dttLastBusyTrip (BusyDetect.c:28)
+    private long _busyPriorTripMs;           // dttPriorLastBusyTrip (BusyDetect.c:29)
+    private long _busyLastClearMs;           // dttLastBusyClear (BusyDetect.c:30)
+
+    private const int BusyHoldMs = 5000;          // intHoldMs (BusyDetect.c:33)
+    private const int BusySampleIntervalMs = 100;  // ARDOPC.c:2062
+    private const int BusyClearMarginMs = 600;     // ARQ.c:1201-1202
+    private const int BusyClearSeedMs = 610;       // ClearBusy's seed (BusyDetect.c:40)
+
+    // A ConReq's body on the air, excluding its leader: the reference fixture
+    // txframe_ConReq500M.wav is 20 940 samples at 12 kHz (1745 ms) of which ardopcf's
+    // default 240 ms leader is the front. Used only to date a ConReq's transmission
+    // start; see IsConReqBlockedByBusy.
+    private const int BusyConReqBodyMs = 1505;
+
     // Transmit bookkeeping: metadata per in-flight request, dequeued at completion.
     private readonly Queue<(bool ArmRepeat, int RepeatIntervalMs)> _txInFlight = new();
     private byte[]? _lastTx;
@@ -166,6 +192,20 @@ public sealed class ArdopArqEngine
     /// <summary>The gearshift (exposed for tests and session logging).</summary>
     public ArdopGearshift Gearshift => _gearshift;
 
+    /// <summary>
+    /// The latched channel-busy state (<c>blnLastBusy</c>, BusyDetect.c:18): what
+    /// <see cref="ArdopArqConfig.ChannelBusy"/> reported, after ardopcf's confirm-and-hold
+    /// hysteresis. False forever when that seam is unset, which is the default.
+    /// </summary>
+    /// <remarks>
+    /// Only updated while the protocol state is DISC, as in ardopcf (ARDOPC.c:2054,
+    /// :2102), and only ever read by things that decide whether to <i>start</i> a session
+    /// or send an unsolicited ID. Nothing inside a session consults it: an IRS must be
+    /// free to ACK inside the ISS's repeat window, so a busy channel must never hold up
+    /// an in-flight transmission.
+    /// </remarks>
+    public bool IsChannelBusy => _busy;
+
     /// <summary>Raised when a frame must be modulated and played. Ordered; the driver
     /// must call <see cref="TransmitCompleted"/> once per request, in order.</summary>
     public event Action<ArdopTxRequest>? TransmitRequested;
@@ -196,6 +236,8 @@ public sealed class ArdopArqEngine
         {
             return;
         }
+
+        SampleBusyDetector(nowMs);
 
         // Repeat timer (CheckTimers, ARDOPC.c:1803).
         if ((_repeatEnabled || _discRepeating) && nowMs > _nextPlayMs)
@@ -241,14 +283,17 @@ public sealed class ArdopArqEngine
             InitializeConnection();
         }
 
-        // Post-session ID (tmrFinalID, ARDOPC.c:1906; busy-detector gate not ported).
-        if (_finalIdAtMs != 0 && nowMs > _finalIdAtMs)
+        // Post-session ID (tmrFinalID, ARDOPC.c:1906), deferred while the channel is
+        // busy exactly as ardopcf defers it (the !blnBusyStatus term there). Housekeeping
+        // in DISC, after teardown: nothing in a session waits on this.
+        if (_finalIdAtMs != 0 && nowMs > _finalIdAtMs && !_busy)
         {
             SendIdFrame(_finalId);
         }
 
-        // 10-minute ID while otherwise idle in DISC (ARDOPC.c:1959).
-        if (_state == ArdopProtocolState.Disc && !_pingRepeating
+        // 10-minute ID while otherwise idle in DISC (ARDOPC.c:1959), likewise held off
+        // while other traffic is on the frequency (ARDOPC.c:1962).
+        if (_state == ArdopProtocolState.Disc && !_pingRepeating && !_busy
             && _lastIdFrameTimeMs != 0 && nowMs - _lastIdFrameTimeMs > 540000)
         {
             SendIdFrame(null);
@@ -367,6 +412,17 @@ public sealed class ArdopArqEngine
         _nowMs = nowMs;
         if (_config.MyCall is null || _state != ArdopProtocolState.Disc)
         {
+            return false;
+        }
+
+        // Addition, not a port: ardopcf transmits the ConReq whatever the busy state
+        // (NeedConReq, ARDOPC.c:1914, into SendARQConnectRequest, ARQ.c:2432, which has
+        // no busy test), leaving it to the host that was sent BUSY TRUE. Under BUSYBLOCK
+        // we also refuse it here. Off unless BUSYBLOCK is on AND ArdopArqConfig.ChannelBusy
+        // is wired, so the default path is untouched.
+        if (_config.BusyBlock && _busy)
+        {
+            Notify($"STATUS ARQ CONNECT REQUEST TO {target} BLOCKED, CHANNEL BUSY.");
             return false;
         }
 
@@ -574,7 +630,21 @@ public sealed class ArdopArqEngine
 
         if (IsCallToMe(frame, out var caller, out var target, out byte replySessionId))
         {
-            // (BUSYBLOCK/ConRejBusy origination not ported — no busy detector yet.)
+            // BUSYBLOCK refusal (ARQ.c:1199-1226): answer ConRejBusy instead of ConAck
+            // when the channel was already in use by someone other than this caller. This
+            // is the only place the busy state can stop a frame being answered, and it is
+            // reached only from the DISC handler, so no established session is affected.
+            if (_config.BusyBlock && IsConReqBlockedByBusy(frame))
+            {
+                // Reset the detector so this frame and the 5 s hold do not read as a
+                // continuous busy condition (ClearBusy, ARQ.c:1207).
+                ClearBusyDetector(_nowMs);
+                Transmit(ArdopFrameCodec.EncodeControl(ArdopFrameType.ConRejBusy, replySessionId), _config.LeaderLengthMs, notBefore);
+                Notify($"REJECTEDBUSY {caller}");
+                Notify($"STATUS ARQ CONNECTION REQUEST FROM {caller} REJECTED, CHANNEL BUSY.");
+                return;  // ardopcf returns here too, leaving blnEnbARQRpt alone
+            }
+
             int reply = IrsNegotiateBw(type);
             if (reply != ArdopFrameType.ConRejBw)
             {
@@ -1566,6 +1636,150 @@ public sealed class ArdopArqEngine
         ArdopProtocolState.Idle => "IDLE",
         _ => "IRStoISS",
     };
+
+    // ------------------------------------------------------------- busy detector
+
+    /// <summary>
+    /// Resets the busy detector to "clear", the state ardopcf seeds on LISTEN TRUE so a
+    /// scanning station is not held off by stale history (<c>ClearBusy</c>,
+    /// BusyDetect.c:36, called from HostInterface.c:882 and from the ConRejBusy path,
+    /// ARQ.c:1207).
+    /// </summary>
+    public void ClearBusyDetector(long nowMs)
+    {
+        _nowMs = nowMs;
+        _busySeeded = true;
+        _busyLastTripMs = nowMs;
+        _busyPriorTripMs = nowMs;
+
+        // +610 ms so the "did the last busy episode clear properly" test below passes
+        // from a cold start, which is what BusyDetect.c:40 does and why.
+        _busyLastClearMs = nowMs + BusyClearSeedMs;
+
+        // Back-date the last raw busy reading past the hold time so a latched busy
+        // releases immediately (BusyDetect.c:41).
+        _busyLastRawMs = nowMs - BusyHoldMs;
+        _busy = false;
+        _busyOnCount = 0;
+        _busyOffCount = 0;
+    }
+
+    /// <summary>
+    /// Samples <see cref="ArdopArqConfig.ChannelBusy"/> and applies ardopcf's hysteresis
+    /// and host reporting: <c>UpdateBusyDetector</c>'s busy half (ARDOPC.c:2054-2142) over
+    /// <c>BusyDetect3</c>'s filtering (BusyDetect.c:123-153).
+    /// </summary>
+    private void SampleBusyDetector(long nowMs)
+    {
+        // THE SAFETY PROPERTY. ardopcf evaluates busy only in DISC: UpdateBusyDetector
+        // returns early in any other protocol state (ARDOPC.c:2054) and the whole
+        // detect-and-report block is inside "if (ProtocolState == DISC)"
+        // (ARDOPC.c:2102-2142). So the busy state is frozen for the life of a session and
+        // cannot gate anything in it. That is not incidental: an IRS has to get its ACK
+        // out inside the ISS's repeat window, and a busy check that stalled a burst would
+        // break the link rather than protect the channel. Do not move this guard, and do
+        // not read _busy from any in-session path.
+        if (_state != ArdopProtocolState.Disc)
+        {
+            return;
+        }
+
+        if (!_busySeeded)
+        {
+            // ardopcf's timestamps start at zero, and every host seeds them immediately
+            // by sending LISTEN TRUE (HostInterface.c:882). Seed on first sample instead,
+            // so the history is never read uninitialised.
+            ClearBusyDetector(nowMs);
+        }
+        else if (nowMs - _busySampledAtMs < BusySampleIntervalMs)
+        {
+            return;  // at most one check per 100 ms (LastBusyCheck, ARDOPC.c:2062)
+        }
+
+        _busySampledAtMs = nowMs;
+
+        // BUSYDET 0 disables detection. ardopcf forces the raw reading false and lets the
+        // ordinary hysteresis release a latched busy (BusyDetect.c:120-121).
+        bool raw = _config.BusyDetectLevel != 0 && (_config.ChannelBusy?.Invoke() ?? false);
+
+        // Busy must be present on 3 consecutive checks, about 250-300 ms, to count
+        // (BusyDetect.c:123-137). dttLastTrip only advances from the 4th, hence "> 3".
+        if (raw)
+        {
+            _busyOnCount++;
+            _busyOffCount = 0;
+            if (_busyOnCount > 3)
+            {
+                _busyLastRawMs = nowMs;
+            }
+        }
+        else
+        {
+            _busyOffCount++;
+            _busyOnCount = 0;
+        }
+
+        if (!_busy && _busyOnCount >= 3)
+        {
+            _busyPriorTripMs = _busyLastTripMs;  // kept for the BUSYBLOCK test
+            _busyLastTripMs = nowMs;
+            _busy = true;
+        }
+        else if (_busy && nowMs - _busyLastRawMs > BusyHoldMs && _busyOffCount >= 3)
+        {
+            // Clearing needs 3 clear checks AND 5 s since the last busy reading
+            // (intHoldMs, BusyDetect.c:33 and :147).
+            _busyLastClearMs = nowMs;
+            _busy = false;
+        }
+
+        // Report transitions of the latched state to the host, tracked separately from
+        // the detector's own flag so that a ClearBusyDetector while the host believes the
+        // channel is busy still produces BUSY FALSE (blnLastBusyStatus, ARDOPC.c:2045,
+        // :2106-2142).
+        if (_busy != _busyReported)
+        {
+            _busyReported = _busy;
+            Notify(_busy ? "BUSY TRUE" : "BUSY FALSE");
+        }
+    }
+
+    /// <summary>
+    /// ardopcf's BUSYBLOCK test for an inbound ConReq (ARQ.c:1197-1202): is the channel
+    /// busy with traffic this caller did not cause?
+    /// </summary>
+    private bool IsConReqBlockedByBusy(ArdopDecodedFrame frame)
+    {
+        if (!_busySeeded)
+        {
+            return false;  // nothing observed, so nothing to blame the caller for
+        }
+
+        // blnLeaderTrippedBusy (ARQ.c:1197). ardopcf asks whether the busy detector
+        // tripped within 300 ms of this frame's leader being detected: if it did, the
+        // caller's own carrier is what tripped it, so the caller is judged on the
+        // PREVIOUS busy episode instead. Without that exception, a detector that hears
+        // the incoming ConReq, which every real one does, would reject every caller.
+        //
+        // ardopcf can compare the two instants directly because its detector runs on the
+        // same audio and stamps dttLastLeaderDetect at leader detect (SoundInput.c:878).
+        // Here the busy reading comes from the host and the engine first sees a frame
+        // once it has fully decoded, one whole frame later, so the same question is asked
+        // over this frame's whole occupancy: did busy trip at any point since this
+        // transmission began? The span is the frame's own measured leader (LEADER is
+        // host-settable from 120 to 2500 ms) plus a ConReq body, plus ardopcf's 300 ms of
+        // slack. Erring long errs toward accepting the call, which is the safe direction:
+        // it degrades to today's behaviour rather than refusing legitimate callers.
+        long conReqSpanMs = frame.LeaderReceivedMs + BusyConReqBodyMs + 300;
+        bool leaderTrippedBusy = _nowMs - _busyLastTripMs < conReqSpanMs;
+
+        // Accept only if the relevant busy episode has since cleared properly, which is
+        // what ardopcf's 600 ms test amounts to: a real episode runs for at least the 5 s
+        // hold, and a cold start is seeded to +610 ms so it passes (BusyDetect.c:40).
+        return leaderTrippedBusy
+            ? _busyLastClearMs - _busyPriorTripMs < BusyClearMarginMs
+            : _busyLastClearMs - _busyLastTripMs < BusyClearMarginMs;
+    }
 
     private void Notify(string message) => HostNotification?.Invoke(message);
 }
