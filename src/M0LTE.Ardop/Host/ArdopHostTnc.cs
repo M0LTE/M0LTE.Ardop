@@ -1179,14 +1179,42 @@ public sealed class ArdopHostTnc : IAsyncDisposable
             RxoMode = _mode == ArdopHostProtocolMode.Rxo,
         };
         _fecReceiver = new ArdopFecReceiver(_demodulator, attach: false);
-        _fecReceiver.DataReceived += (tag, data) => SendDataToHost(
-            tag switch
+        _fecReceiver.DataReceived += (tag, data) =>
+        {
+            // FEC and ERR belong to FEC mode and must never reach a host that is running
+            // an ARQ session. ardopcf raises them only from ProcessRcvdFECDataFrame and
+            // PassFECErrDataToHost (FEC.c:332-393), which run in FEC protocol mode; wiring
+            // this receiver unconditionally was ours, and it leaked.
+            //
+            // It leaks across a boundary rather than within one, which is why it survived
+            // the bench: a failed frame's data is deliberately held back and delivered
+            // later, when the sender moves on to a different frame type. So a frame that
+            // failed while this station was idle and monitoring is delivered during
+            // whatever is happening by then, including a session that started afterwards.
+            //
+            // Measured at GB7RDG on 2026-09-13: 432 bytes of undecodable data arrived
+            // tagged ERR in the middle of a mail forward, and LinBPQ, which treats any
+            // block that is not IDF as session data, aborted with a glibc buffer overflow
+            // and was restarted by systemd. Five sessions, five crashes.
+            //
+            // IDF is different and stays: an ID frame is a monitoring artefact rather than
+            // session data, ardopcf reports it outside FEC mode, and LinBPQ has a dedicated
+            // handler that files it in the MH list.
+            if (tag is ArdopFecTag.Fec or ArdopFecTag.Err
+                && _mode != ArdopHostProtocolMode.Fec)
             {
-                ArdopFecTag.Fec => "FEC",
-                ArdopFecTag.Err => "ERR",
-                _ => "IDF",
-            },
-            data);
+                return;
+            }
+
+            SendDataToHost(
+                tag switch
+                {
+                    ArdopFecTag.Fec => "FEC",
+                    ArdopFecTag.Err => "ERR",
+                    _ => "IDF",
+                },
+                data);
+        };
         _demodulator.FrameDecoded += OnFrameDecoded;
     }
 
