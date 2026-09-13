@@ -44,6 +44,28 @@ server.Start();
 `ptt`, plays through `tx`, drains, and unkeys. For full control, construct
 `new ArdopHostTnc(...)` yourself and bind its `Transmitter` / `ProcessReceive` seam directly.
 
+## Monitoring the channel
+
+`ArdopHostTnc` raises a pair of events for anything that shows the operator what the radio
+is doing. Neither is part of the host protocol: the command and data sockets carry only
+what this station's own session sent and received.
+
+```csharp
+tnc.FrameDecoded    += f => Console.WriteLine($"heard {f.Name} from {f.Caller}");
+tnc.FrameTransmitted += f => Console.WriteLine($"sent  {f.Name} to {f.Target}");
+```
+
+- `FrameDecoded` is every frame the demodulator recovers, good or bad, including frames
+  belonging to other stations' sessions.
+- `FrameTransmitted` is every frame this station sends: ARQ frames, FEC frames and ID
+  frames, named with the same spelling the station at the other end will list. The
+  two-tone test raises nothing, being tones rather than a frame. It is raised once the
+  burst has been played and while PTT is still up, so a frame announced is one that
+  reached the transmitter, and a handler that blocks holds PTT up.
+
+Without the second one a host has no way to say what its own bursts were: `Transmitter` is
+handed modulated audio, not a frame.
+
 ## Channel busy
 
 ardopcf's busy detector is **not** ported: it is a spectral peak-to-baseline test on the
