@@ -26,6 +26,8 @@ public class ArdopHostTncTests
 
         public List<short[]> Transmitted { get; } = [];
 
+        public List<ArdopTransmittedFrame> Sent { get; } = [];
+
         public Host()
         {
             Tnc = new ArdopHostTnc(
@@ -43,6 +45,13 @@ public class ArdopHostTncTests
                 lock (Data)
                 {
                     Data.Add((tag, data));
+                }
+            };
+            Tnc.FrameTransmitted += frame =>
+            {
+                lock (Sent)
+                {
+                    Sent.Add(frame);
                 }
             };
             Tnc.Transmitter = audio =>
@@ -567,6 +576,136 @@ public class ArdopHostTncTests
         conReq.Target.Should().Be("G8BBB");
         conReq.Ok.Should().BeTrue();
         heard.Should().Contain(f => f.SnDb != 0, "a monitor reports how well it heard each frame");
+    }
+
+    // ----------------------------------------------------------- transmit hook
+
+    [Fact]
+    public async Task Frame_Transmitted_Names_Our_Own_Connect_Requests_And_Who_They_Were_To()
+    {
+        // The monitor hook's other half. Transmitter is handed modulated audio rather than a
+        // frame, so without this a host cannot say what its own bursts were: an operator
+        // watching the ARQ session they started saw nothing listed at all, ten connect
+        // requests over forty seconds reading as a modem that did nothing
+        // (pdn-soundmodem issue 471).
+        await using var host = new Host();
+        host.Exchange("MYCALL M0AAA");
+        host.Exchange("ARQBW 500MAX");
+        host.Exchange("ARQCALL G8BBB 5");
+
+        host.WaitForCommand(c => c.Contains("PTT FALSE"), 10000)
+            .Should().BeTrue("the connect request must go out");
+
+        lock (host.Sent)
+        {
+            host.Sent.Should().NotBeEmpty();
+            ArdopTransmittedFrame conReq = host.Sent[0];
+            conReq.Type.Should().Be(ArdopFrameType.ConReq500M);
+            conReq.Name.Should().Be("ConReq500M", "the spelling the far end will list it under");
+            conReq.Caller.Should().Be("M0AAA");
+            conReq.Target.Should().Be("G8BBB");
+            conReq.Data.Should().BeEmpty("a connect request carries no payload");
+        }
+    }
+
+    [Fact]
+    public async Task Frame_Transmitted_Covers_The_Fec_Path_Including_The_Id_Frame()
+    {
+        // FEC frames and ID frames reach the transmitter already modulated, by a different
+        // route from the ARQ engine's. Both are real transmissions and both are raised.
+        await using var host = new Host();
+        host.Exchange("MYCALL M0AAA");
+        host.Exchange("GRIDSQUARE IO91VK");
+        host.Exchange("PROTOCOLMODE FEC");
+        host.Exchange("FECMODE 4FSK.500.100");
+        host.Exchange("FECID TRUE");
+
+        byte[] payload = new byte[100];
+        new Random(7).NextBytes(payload);
+        host.Tnc.AcceptHostData(payload);
+        host.WaitForCommand(c => c.Contains("BUFFER 100"), 1000).Should().BeTrue();
+        host.Exchange("FECSEND TRUE");
+        host.WaitForCommand(c => c.Contains("NEWSTATE DISC "), 15000)
+            .Should().BeTrue("the send loop must drain and return to DISC");
+
+        lock (host.Sent)
+        {
+            host.Sent.Should().HaveCount(3, "an ID frame ahead of the two data frames");
+            host.Sent[0].Name.Should().Be("IDFrame");
+            host.Sent[0].Caller.Should().Be("M0AAA");
+            host.Sent[0].GridSquare.Should().Be("IO91VK");
+            host.Sent[1..].Should().OnlyContain(
+                f => f.Name.StartsWith("4FSK.500.100", StringComparison.Ordinal));
+            host.Sent[1..].SelectMany(f => f.Data).Should().Equal(
+                payload, "a data frame reports the payload it carried, as the far end reports it");
+        }
+    }
+
+    [Fact]
+    public async Task Frame_Transmitted_Says_Nothing_About_The_Two_Tone_Test()
+    {
+        // Five seconds of tones is a transmission but not a frame, and a row claiming a frame
+        // type for it would be an invention.
+        await using var host = new Host();
+        host.Exchange("MYCALL M0AAA");
+        host.Exchange("TWOTONETEST").Should().Equal("TWOTONETEST");
+        host.WaitForCommand(c => c.Contains("PTT FALSE"), 10000).Should().BeTrue();
+
+        lock (host.Transmitted)
+        {
+            host.Transmitted.Should().ContainSingle("the tones went out");
+        }
+
+        lock (host.Sent)
+        {
+            host.Sent.Should().BeEmpty("tones are not a frame");
+        }
+    }
+
+    [Fact]
+    public async Task A_Transmitted_Frame_Is_Named_As_The_Station_Hearing_It_Names_It()
+    {
+        // The whole point of the event: our own row and the far end's row for the same burst
+        // say the same thing.
+        await using var host = new Host();
+        host.Exchange("MYCALL M0AAA");
+        host.Exchange("GRIDSQUARE IO91VK");
+        host.Exchange("PROTOCOLMODE FEC");
+        host.Exchange("FECMODE 4FSK.500.100");
+        host.Exchange("FECID TRUE");
+
+        byte[] payload = new byte[64];
+        new Random(8).NextBytes(payload);
+        host.Tnc.AcceptHostData(payload);
+        host.WaitForCommand(c => c.Contains("BUFFER 64"), 1000).Should().BeTrue();
+        host.Exchange("FECSEND TRUE");
+        host.WaitForCommand(c => c.Contains("NEWSTATE DISC "), 15000).Should().BeTrue();
+
+        var heard = new List<ArdopDecodedFrame>();
+        var listener = new Host();
+        await using (listener.ConfigureAwait(false))
+        {
+            listener.Exchange("PROTOCOLMODE FEC");
+            listener.Tnc.FrameDecoded += frame => heard.Add(frame);
+            lock (host.Transmitted)
+            {
+                foreach (short[] burst in host.Transmitted)
+                {
+                    Feed(listener.Tnc, burst);
+                    Feed(listener.Tnc, new short[4800]);
+                }
+            }
+
+            Feed(listener.Tnc, new short[4800]);
+        }
+
+        List<string> sentNames;
+        lock (host.Sent)
+        {
+            sentNames = [.. host.Sent.Select(f => f.Name)];
+        }
+
+        heard.Where(f => f.Ok).Select(f => f.Name).Should().Equal(sentNames);
     }
 
     // ------------------------------------------------- full session, host to host

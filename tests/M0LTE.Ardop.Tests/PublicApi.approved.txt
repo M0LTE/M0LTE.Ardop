@@ -176,6 +176,21 @@ namespace M0LTE.Ardop
         public static bool TryFromBytes(System.ReadOnlySpan<byte> wire, out M0LTE.Ardop.ArdopStationId stationId) { }
         public static bool TryParse(string text, out M0LTE.Ardop.ArdopStationId stationId) { }
     }
+    [System.Runtime.CompilerServices.RequiredMember]
+    public sealed class ArdopTransmittedFrame : System.IEquatable<M0LTE.Ardop.ArdopTransmittedFrame>
+    {
+        [System.Obsolete("Constructors of types with required members are not supported in this version of " +
+            "your compiler.", true)]
+        public ArdopTransmittedFrame() { }
+        public string? Caller { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public byte[] Data { get; init; }
+        public string? GridSquare { get; init; }
+        public string Name { get; }
+        public string? Target { get; init; }
+        [System.Runtime.CompilerServices.RequiredMember]
+        public byte Type { get; init; }
+    }
 }
 namespace M0LTE.Ardop.Arq
 {
@@ -365,6 +380,7 @@ namespace M0LTE.Ardop.Host
         public event System.Action<string>? CommandToHost;
         public event System.Action<string, byte[]>? DataToHost;
         public event System.Action<M0LTE.Ardop.ArdopDecodedFrame>? FrameDecoded;
+        public event System.Action<M0LTE.Ardop.ArdopTransmittedFrame>? FrameTransmitted;
         public void AcceptHostData(System.ReadOnlySpan<byte> data) { }
         public System.Threading.Tasks.ValueTask DisposeAsync() { }
         public void HostLinkLost() { }

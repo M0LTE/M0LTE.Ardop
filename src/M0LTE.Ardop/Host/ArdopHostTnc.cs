@@ -128,7 +128,12 @@ public sealed class ArdopHostTnc : IAsyncDisposable
     private string _playbackDevice;
     private bool _initializing;
 
-    private sealed record TxItem(ArdopTxRequest? EngineRequest, short[]? Audio, TaskCompletionSource? Done);
+    // EncodedFrame is what the audio was modulated from, carried alongside it so the transmit
+    // worker can say what the burst was (FrameTransmitted). The engine path has it on its
+    // request; the pre-modulated path (FEC frames, ID frames) would otherwise have thrown it
+    // away at the modulator. Null on the two-tone test, which is not a frame.
+    private sealed record TxItem(
+        ArdopTxRequest? EngineRequest, short[]? Audio, TaskCompletionSource? Done, byte[]? EncodedFrame = null);
 
     /// <summary>Creates a virtual TNC.</summary>
     /// <param name="captureDevice">Audio capture device name reported by CAPTURE.</param>
@@ -202,6 +207,25 @@ public sealed class ArdopHostTnc : IAsyncDisposable
     /// thread: handlers must not block.
     /// </remarks>
     public event Action<ArdopDecodedFrame>? FrameDecoded;
+
+    /// <summary>
+    /// Every frame this station transmits, raised as the burst is keyed: the transmit
+    /// counterpart of <see cref="FrameDecoded"/>, naming the frame with the same spelling the
+    /// station at the other end will list when it decodes it.
+    /// </summary>
+    /// <remarks>
+    /// <para>For monitors, again. A transmitter is handed modulated audio, not a frame, so
+    /// without this a host has no way to say what its own bursts were: an operator watching
+    /// their own panel saw the ARQ session they started leave no trace at all, which reads as
+    /// a modem that did nothing. Every real frame is raised - ARQ, FEC and ID alike - and the
+    /// two-tone test is not, because it is tones rather than a frame.</para>
+    /// <para>Raised on the transmit worker once <see cref="Transmitter"/> has played the burst
+    /// and while PTT is still up, outside the TNC's lock. After the play rather than before it,
+    /// so a frame announced here is one that reached the transmitter: a station whose transmitter
+    /// refuses the burst has not transmitted and must not be listed as having done so. A handler
+    /// that blocks holds PTT up, so handlers must not block.</para>
+    /// </remarks>
+    public event Action<ArdopTransmittedFrame>? FrameTransmitted;
 
     // ------------------------------------------------------------------ audio side
 
@@ -1443,7 +1467,7 @@ public sealed class ArdopHostTnc : IAsyncDisposable
         }
 
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_txQueue.Writer.TryWrite(new TxItem(null, audio, done)))
+        if (!_txQueue.Writer.TryWrite(new TxItem(null, audio, done, encodedFrame)))
         {
             done.TrySetResult();  // shutting down — don't strand the FEC loop
         }
@@ -1513,6 +1537,17 @@ public sealed class ArdopHostTnc : IAsyncDisposable
             try
             {
                 await transmitter(audio).ConfigureAwait(false);
+
+                // Every transmission funnels through here, which is why this is where a monitor
+                // is told what went out. After the play rather than before it, so what is
+                // announced is a burst that reached the transmitter: a station that cannot
+                // transmit must not be told it just did. The two-tone test carries no encoded
+                // frame and is therefore not announced as one.
+                if (FrameTransmitted is { } transmitted
+                    && (item.EngineRequest?.EncodedFrame ?? item.EncodedFrame) is { Length: >= 2 } encoded)
+                {
+                    transmitted(Describe(encoded));
+                }
             }
             finally
             {
@@ -1532,6 +1567,83 @@ public sealed class ArdopHostTnc : IAsyncDisposable
 
             item.Done?.TrySetResult();
         }
+    }
+
+    /// <summary>
+    /// Reads a frame back out of the bytes it was encoded from, for <see cref="FrameTransmitted"/>:
+    /// the frame type, the callsigns ConReq/Ping/ID carry in clear, and the net payload of a data
+    /// frame.
+    /// </summary>
+    /// <remarks>
+    /// Taken from the encoded frame rather than from the protocol state that produced it, so what
+    /// a monitor is told is what actually goes on the air, by the same unpacking a receiving
+    /// station does (<see cref="ArdopFrameCodec.TryDecodeStationBlock"/>). Cheap, and once per
+    /// burst: a burst is hundreds of milliseconds of audio.
+    /// </remarks>
+    private static ArdopTransmittedFrame Describe(byte[] encoded)
+    {
+        byte type = encoded[0];
+
+        // ConReq/Ping/ID: two type bytes then 12 data + 4 RS, the block a receiver unpacks in
+        // Decode4FSKConReq/Decode4FSKID.
+        bool carriesStations = type is ArdopFrameType.IdFrame or ArdopFrameType.Ping
+            || type is >= ArdopFrameType.ConReqMin and <= ArdopFrameType.ConReqMax;
+        if (carriesStations && encoded.Length >= 18)
+        {
+            bool isId = type == ArdopFrameType.IdFrame;
+            Span<byte> block = stackalloc byte[16];
+            encoded.AsSpan(2, 16).CopyTo(block);
+            if (ArdopFrameCodec.TryDecodeStationBlock(
+                    block, isId, out ArdopStationId caller, out ArdopStationId? target, out string second))
+            {
+                return new ArdopTransmittedFrame
+                {
+                    Type = type,
+                    Data = [],
+                    Caller = caller.ToString(),
+                    Target = target?.ToString(),
+                    GridSquare = isId && second.Length > 0 ? second : null,
+                };
+            }
+        }
+
+        return new ArdopTransmittedFrame
+        {
+            Type = type,
+            Data = ArdopFrameType.IsData(type) && ArdopFrameInfo.TryGet(type, out ArdopFrameInfo info)
+                ? DataPayload(encoded, info)
+                : [],
+        };
+    }
+
+    /// <summary>
+    /// The net payload of an encoded data frame: each carrier block's count byte says how much of
+    /// it is data, exactly as <see cref="ArdopFrameCodec.EncodeDataFrame"/> laid it out.
+    /// </summary>
+    private static byte[] DataPayload(byte[] encoded, ArdopFrameInfo info)
+    {
+        // The 600 Bd long frame is three sequential blocks; everything else is one per carrier.
+        (int blocks, int blockDataLen, int blockRsLen) = info.Type is 0x7A or 0x7B
+            ? (3, info.DataLength / 3, info.RsLength / 3)
+            : (info.CarrierCount, info.DataLength, info.RsLength);
+        int blockLength = blockDataLen + 3 + blockRsLen;
+
+        int total = 0;
+        for (int block = 0, at = 2; block < blocks && at + blockLength <= encoded.Length; block++, at += blockLength)
+        {
+            total += Math.Min(encoded[at], blockDataLen);
+        }
+
+        var payload = new byte[total];
+        int written = 0;
+        for (int block = 0, at = 2; block < blocks && at + blockLength <= encoded.Length; block++, at += blockLength)
+        {
+            int count = Math.Min(encoded[at], blockDataLen);
+            encoded.AsSpan(at + 1, count).CopyTo(payload.AsSpan(written));
+            written += count;
+        }
+
+        return payload;
     }
 
     // ------------------------------------------------------------------- plumbing
