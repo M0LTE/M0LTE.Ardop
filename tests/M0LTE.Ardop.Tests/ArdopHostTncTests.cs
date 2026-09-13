@@ -341,6 +341,51 @@ public class ArdopHostTncTests
     }
 
     [Fact]
+    public async Task Err_Never_Reaches_A_Host_That_Is_Not_In_Fec_Mode()
+    {
+        // GB7RDG, 2026-09-13: 432 bytes tagged ERR arrived at LinBPQ in the middle of an
+        // ARQ mail forward, and LinBPQ, which treats any block that is not IDF as session
+        // data, aborted with a glibc buffer overflow. Five sessions, five crashes.
+        //
+        // ERR is a FEC-mode concept: ardopcf raises it only from PassFECErrDataToHost
+        // (FEC.c:335). What made it cross into ARQ is that a failed frame's data is
+        // deliberately held back and delivered later, when the sender moves on, so it is
+        // released into whatever the station is doing by then rather than into the mode it
+        // arrived in. The guard is therefore at delivery, not at the point it is raised.
+        //
+        // This asserts the contract rather than one route to breaking it: a host that is
+        // not in FEC mode is never handed FEC or ERR, however the receiver came by them.
+        byte[] lostData = new byte[64];
+        new Random(11).NextBytes(lostData);
+        short[] damaged = new ArdopModulator().Modulate(
+            ArdopFrameCodec.EncodeDataFrame(0x4A, lostData, 0xFF));
+        Array.Clear(damaged, 2880 + 2400, 83 * 480 / 2);
+
+        byte[] goodData = new byte[32];
+        new Random(12).NextBytes(goodData);
+        short[] good = new ArdopModulator().Modulate(
+            ArdopFrameCodec.EncodeDataFrame(0x4C, goodData, 0xFF));
+
+        await using var host = new Host();
+        host.Exchange("MYCALL M0AAA");
+        host.Exchange("PROTOCOLMODE ARQ");
+
+        Feed(host.Tnc, new short[2400]);
+        Feed(host.Tnc, damaged);
+        Feed(host.Tnc, new short[4800]);
+        Feed(host.Tnc, good);
+        Feed(host.Tnc, new short[4800]);
+
+        lock (host.Data)
+        {
+            host.Data.Should().NotContain(
+                d => d.Tag == "ERR",
+                "an ARQ host must never be handed a failed FEC frame as though it were session data");
+            host.Data.Should().NotContain(d => d.Tag == "FEC");
+        }
+    }
+
+    [Fact]
     public async Task Fec_Mode_Reports_Heard_ConReqs_As_Arq_Display_Text()
     {
         await using var host = new Host();
